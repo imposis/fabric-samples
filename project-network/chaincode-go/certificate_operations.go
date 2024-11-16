@@ -19,14 +19,14 @@ type SmartContract struct {
 }
 
 type Certificate struct {
-	Type            string `json:"objectType"` //Type is used to distinguish the various types of objects in state database
+	Type            string `json:"objectType"`
 	CertificateId   string `json:"certificateId"`
 	NameSurname     string `json:"nameSurname"`
 	CertType        string `json:"certType"`
 	CertDescription string `json:"certDescription"`
 	ValidFrom       string `json:"validFrom"`
 	ValidUntil      string `json:"validUntil"`
-	Owner           string `json:"owner"` //This is the clientID of the submitting client
+	Owner           string `json:"owner"`
 }
 
 type CertificatePrivateDetails struct {
@@ -259,44 +259,24 @@ func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.Transactio
 	return certificateDetails, nil
 }
 
-func (s *SmartContract) RemoveCertificate(ctx contractapi.TransactionContextInterface) error {
-	transientMap, err := ctx.GetStub().GetTransient()
-	if err != nil {
-		return fmt.Errorf("error getting transient: %v", err)
-	}
-
-	transientDeleteJSON, ok := transientMap["certificate_delete"]
-	if !ok {
-		return fmt.Errorf("certificate to delete not found in the transient map")
-	}
-
-	type certificateDelete struct {
-		CertificateId string `json:"certificateId"`
-	}
-
-	var certificateDeleteInput certificateDelete
-	err = json.Unmarshal(transientDeleteJSON, &certificateDeleteInput)
-	if err != nil {
-		return fmt.Errorf("failed to unmarshal JSON: %v", err)
-	}
-
-	if len(certificateDeleteInput.CertificateId) == 0 {
+func (s *SmartContract) RemoveCertificate(ctx contractapi.TransactionContextInterface, certificateId string) error {
+	if len(certificateId) == 0 {
 		return fmt.Errorf("certificate ID must be a non-empty string")
 	}
 
-	err = verifyClientOrgMatchesPeerOrg(ctx)
+	err := verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
-		return fmt.Errorf("RemoteCertificate cannot be performed: Error %v", err)
+		return fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
 	}
 
-	log.Printf("Deleting Certificate: %v", certificateDeleteInput.CertificateId)
+	log.Printf("Deleting Certificate: %v", certificateId)
 
-	valAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateDeleteInput.CertificateId)
+	valAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateId)
 	if err != nil {
 		return fmt.Errorf("failed to get certificate: %v", err)
 	}
 	if valAsBytes == nil {
-		return fmt.Errorf("certificate %v not found", certificateDeleteInput.CertificateId)
+		return fmt.Errorf("certificate %v not found", certificateId)
 	}
 
 	ownerCollection, err := getCollectionName(ctx)
@@ -304,20 +284,20 @@ func (s *SmartContract) RemoveCertificate(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("failed to get collection name: %v", err)
 	}
 
-	valAsBytes, err = ctx.GetStub().GetPrivateData(ownerCollection, certificateDeleteInput.CertificateId)
+	valAsBytes, err = ctx.GetStub().GetPrivateData(ownerCollection, certificateId)
 	if err != nil {
 		return fmt.Errorf("failed to get certificate: %v", err)
 	}
 	if valAsBytes == nil {
-		return fmt.Errorf("certificate %v not found", certificateDeleteInput.CertificateId)
+		return fmt.Errorf("certificate %v not found", certificateId)
 	}
 
-	err = ctx.GetStub().DelPrivateData(certificateCollection, certificateDeleteInput.CertificateId)
+	err = ctx.GetStub().DelPrivateData(certificateCollection, certificateId)
 	if err != nil {
 		return fmt.Errorf("failed to delete certificate: %v", err)
 	}
 
-	err = ctx.GetStub().DelPrivateData(ownerCollection, certificateDeleteInput.CertificateId)
+	err = ctx.GetStub().DelPrivateData(ownerCollection, certificateId)
 	if err != nil {
 		return fmt.Errorf("failed to delete certificate: %v", err)
 	}
