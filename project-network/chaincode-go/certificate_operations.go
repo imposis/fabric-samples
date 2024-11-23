@@ -12,18 +12,17 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
+//TODO: Handle admin only write
+//TODO: Handle admin only chaincode approval
+//TODO: Check compositeKey options that work...
+
 const certificateCollection string = "certificateCollection"
 
-// Should be implemented, need to check
-// TODO: Add certificate Issuer
-//TODO: When certificate is revoked, create a new certificate with the old one as parent
-//TODO: When certificate validity is extended, create a new certificate
-//TODO: Owner should be the certificate holder
-//TODO: Owner member of issuing org
-//TODO: Endorsment policy only admins of organization
+const revokedType string = "revoked"
+const validityChanged string = "validityChange"
+const certificateType string = "certificate"
 
-// Not implemented need to change and check
-//TODO: Endorsment policy higher than 90% of members
+const certIndex string = "parentCertificateId~numChanged"
 
 // SmartContract
 type SmartContract struct {
@@ -31,16 +30,17 @@ type SmartContract struct {
 }
 
 type Certificate struct {
-	Type            string `json:"objectType"`
-	CertificateId   string `json:"certificateId"`
-	Version         string `json:"version"`
-	NameSurname     string `json:"nameSurname"`
-	CertType        string `json:"certType"`
-	CertDescription string `json:"certDescription"`
-	ValidFrom       string `json:"validFrom"`
-	ValidUntil      string `json:"validUntil"`
-	Owner           string `json:"owner"`
-	Issuer          string `json:"issuer"`
+	Type                string `json:"objectType"`
+	CertificateId       string `json:"certificateId"`
+	ParentCertificateId string `json:"parentCertificateId"`
+	NumChanged          string `json:"numChanged"`
+	NameSurname         string `json:"nameSurname"`
+	CertType            string `json:"certType"`
+	CertDescription     string `json:"certDescription"`
+	ValidFrom           string `json:"validFrom"`
+	ValidUntil          string `json:"validUntil"`
+	Owner               string `json:"owner"`
+	Issuer              string `json:"issuer"`
 }
 
 type CertificatePrivateDetails struct {
@@ -63,15 +63,14 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	}
 
 	type certificateTransientInput struct {
-		CertificateId   string `json:"certificateId"`   //ID of the certificate for futher operations on certificate
+		CertificateId   string `json:"certificateId"`   //ID of the certificate, unqiue, assigned by overhead system
 		UID             string `json:"UID"`             //Unique ID of the certificate holder, only the owner organization can see this
 		NameSurname     string `json:"nameSurname"`     //Name and surname of the certificate holder
 		CertType        string `json:"certType"`        //Type of the certificate - IT, Economic, ...
 		CertDescription string `json:"certDescription"` //Short description of the certificate
 		ValidFrom       string `json:"validFrom"`       // Valid from date
 		ValidUntil      string `json:"validUntil"`      //Valid until date
-		Version         string `json:"version"`         //Holdes the information on the number of times the certificate has been changed
-		Owner           string `json:"owner"`           //Owner is the certificate holder
+		Owner           string `json:"owner"`           //Owner of the certificate
 	}
 
 	var certificateInput certificateTransientInput
@@ -101,8 +100,8 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	if len(certificateInput.ValidUntil) == 0 {
 		return fmt.Errorf("validUntil field must be a non-empty string")
 	}
-	if len(certificateInput.Version) == 0 {
-		return fmt.Errorf("version field must be a non-empty string")
+	if len(certificateInput.Owner) == 0 {
+		return fmt.Errorf("owner field must be a non-empty string")
 	}
 
 	validFrom, err := time.Parse("2006-01-02", certificateInput.ValidFrom)
@@ -117,10 +116,8 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("validFrom must be before validUntil")
 	}
 
-	compositeKey, err := ctx.GetStub().CreateCompositeKey("certificate", []string{certificateInput.CertificateId, "0"})
-
 	// Check if certificate already exists
-	certificateAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, compositeKey)
+	certificateAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateInput.CertificateId)
 	if err != nil {
 		return fmt.Errorf("failed to get certificate: %v", err)
 	} else if certificateAsBytes != nil {
@@ -144,16 +141,17 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 
 	// Make submitting client the owner
 	certificate := Certificate{
-		Type:            "certificate",
-		CertificateId:   certificateInput.CertificateId,
-		NameSurname:     certificateInput.NameSurname,
-		CertType:        certificateInput.CertType,
-		CertDescription: certificateInput.CertDescription,
-		ValidFrom:       certificateInput.ValidFrom,
-		ValidUntil:      certificateInput.ValidUntil,
-		Owner:           certificateInput.Owner,
-		Version:         "0",
-		Issuer:          clientID,
+		Type:                certificateType,
+		CertificateId:       certificateInput.CertificateId,
+		NameSurname:         certificateInput.NameSurname,
+		CertType:            certificateInput.CertType,
+		CertDescription:     certificateInput.CertDescription,
+		ValidFrom:           certificateInput.ValidFrom,
+		ValidUntil:          certificateInput.ValidUntil,
+		ParentCertificateId: "",
+		NumChanged:          "0",
+		Issuer:              clientID,
+		Owner:               certificateInput.Owner,
 	}
 	certificateJSONasBytes, err := json.Marshal(certificate)
 	if err != nil {
@@ -163,9 +161,9 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	// Save certificate to private data collection
 	// Typical logger, logs to stdout/file in the fabric managed docker container, running this chaincode
 	// Look for container name like dev-peer0.org1.example.com-{chaincodename_version}-xyz
-	log.Printf("CreateCertificate Put: collection %v, ID %v, owner %v", certificateCollection, compositeKey, clientID)
+	log.Printf("CreateCertificate Put: collection %v, ID %v, owner %v", certificateCollection, certificateInput.CertificateId, clientID)
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
+	err = ctx.GetStub().PutPrivateData(certificateCollection, certificateInput.CertificateId, certificateJSONasBytes)
 	if err != nil {
 		return fmt.Errorf("failed to put certificate into private data collecton: %v", err)
 	}
@@ -189,7 +187,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 
 	// Put certificate appraised value into owners org specific private data collection
 	log.Printf("Put: collection %v, ID %v", orgCollection, certificateInput.CertificateId)
-	err = ctx.GetStub().PutPrivateData(orgCollection, compositeKey, certificatePrivateDetailsAsBytes)
+	err = ctx.GetStub().PutPrivateData(orgCollection, certificateInput.CertificateId, certificatePrivateDetailsAsBytes)
 	if err != nil {
 		return fmt.Errorf("failed to put certificate private details: %v", err)
 	}
@@ -197,116 +195,102 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	return nil
 }
 
-func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, id string, validFrom string, validUntil string) error {
-	log.Printf("ChangeCertificateValidUntil: collection %v, ID %v", certificateCollection, id)
-	if len(id) == 0 {
-		return fmt.Errorf("certificate ID must be a non-empty string")
-	}
+func (s *SmartContract) ChangeCertificateValidUntil(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
+	log.Printf("ChangeCertificateValidUntil: collection %v, ID %v", certificateCollection, parentCertificateId)
 
-	certificate, err := s.ReadCertificate(ctx, id)
+	certificate, err := s.ReadCertificate(ctx, parentCertificateId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if certificate == nil {
-		return fmt.Errorf("certificate %v does not exist", id)
+		return nil, fmt.Errorf("certificate %v does not exist", parentCertificateId)
+	}
+
+	err = verifyClientOrgMatchesPeerOrg(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
+	}
+
+	newCertificate, err := s.ReadCertificate(ctx, newCertificateId)
+	if err != nil {
+		return nil, err
+	}
+	if newCertificate != nil {
+		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
+	}
+
+	if certificate.Type == revokedType {
+		return nil, fmt.Errorf("certificate is revoked")
 	}
 
 	validUntilDate, err := time.Parse("2006-01-02", validUntil)
 	if err != nil {
-		return fmt.Errorf("failed to parse validUntil input argument: %v", err)
+		return nil, fmt.Errorf("failed to parse validUntil input argument: %v", err)
 	}
 
-	validFromDate, err := time.Parse("2006-01-02", validFrom)
+	certificateValidFromDate, err := time.Parse("2006-01-02", validFrom)
 	if err != nil {
-		return fmt.Errorf("failed to parse certificateValidFromDate: %v", err)
+		return nil, fmt.Errorf("failed to parse certificateValidFromDate: %v", err)
 	}
 
-	if validUntilDate.Before(validFromDate) {
-		return fmt.Errorf("New validUntil date must be after validFrom date. %v < %v", validUntilDate, validFromDate)
+	if validUntilDate.Before(certificateValidFromDate) {
+		return nil, fmt.Errorf("New validUntil date must be after validFrom date. %v < %v", validUntilDate, certificateValidFromDate)
 	}
 
-	newVersion, err := strconv.Atoi(certificate.Version)
-	if err != nil {
-		return fmt.Errorf("failed to parse certificate version: %v", err)
-	}
-	certificate.Version = strconv.Itoa(newVersion + 1)
-	certificate.Type = "CertificateValidityChange"
 	certificate.ValidUntil = validUntil
 	certificate.ValidFrom = validFrom
-
-	compositeKey, err := ctx.GetStub().CreateCompositeKey("certificate", []string{id, certificate.Version})
-	if err != nil {
-		return fmt.Errorf("failed to create composite key: %v", err)
-	}
+	certificate.CertificateId = newCertificateId
+	certificate.Type = validityChanged
+	certificate.ParentCertificateId = parentCertificateId
+	certificate.NumChanged = increaseNumChanged(certificate.NumChanged)
 
 	certificateJSONasBytes, err := json.Marshal(certificate)
 	if err != nil {
-		return fmt.Errorf("failed to marshal certificate into JSON: %v", err)
+		return nil, fmt.Errorf("failed to marshal certificate into JSON: %v", err)
 	}
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
+	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
 	if err != nil {
-		return fmt.Errorf("failed to put certificate into private data collecton: %v", err)
+		return nil, fmt.Errorf("failed to put certificate into private data collecton: %v", err)
 	}
 
-	return nil
+	return certificate, nil
 }
 
-func (s *SmartContract) ReadAllCertificateVersions(ctx contractapi.TransactionContextInterface, id string) ([]*Certificate, error) {
-	if len(id) == 0 {
-		return nil, fmt.Errorf("certificate ID must be a non-empty string")
-	}
-
-	iterator, err := ctx.GetStub().GetPrivateDataByPartialCompositeKey(certificateCollection, "certificate", []string{id})
+func (s *SmartContract) ReadCertificate(ctx contractapi.TransactionContextInterface, certificateId string) (*Certificate, error) {
+	log.Printf("ReadCertificate: collection %v, ID %v", certificateCollection, certificateId)
+	certificateJSON, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from private data collection: %v", err)
 	}
-	defer iterator.Close()
 
-	var certificates []*Certificate
-
-	for iterator.HasNext() {
-		response, err := iterator.Next()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read from private data collection: %v", err)
-		}
-
-		var certificate *Certificate
-		err = json.Unmarshal(response.Value, &certificate)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
-		}
-
-		certificates = append(certificates, certificate)
-	}
-
-	return certificates, nil
-}
-
-func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.TransactionContextInterface, collection string, id string) (*CertificatePrivateDetails, error) {
-	log.Printf("ReadCertificatePrivateDetails: collection %v, ID %v", collection, id)
-	if len(id) == 0 {
-		return nil, fmt.Errorf("certificate ID must be a non-empty string")
-	}
-
-	iterator, err := ctx.GetStub().GetPrivateDataByPartialCompositeKey(collection, "certificate", []string{id})
-	if err != nil {
-		return nil, fmt.Errorf("failed to read from private data collection: %v", err)
-	}
-	defer iterator.Close()
-
-	if !iterator.HasNext() {
-		log.Printf("CertificatePrivateDetails for %v does not exist in collection %v", id, collection)
+	if certificateJSON == nil {
+		log.Printf("%v does not exist in collection %v", certificateId, certificateCollection)
 		return nil, nil
 	}
 
-	response, err := iterator.Next()
+	var certificate *Certificate
+	err = json.Unmarshal(certificateJSON, &certificate)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from private data collection: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
+	}
+
+	return certificate, nil
+}
+
+func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.TransactionContextInterface, collection string, certificateId string) (*CertificatePrivateDetails, error) {
+	log.Printf("ReadCertificatePrivateDetails: collection %v, ID %v", collection, certificateId)
+	certificateDetailsJSON, err := ctx.GetStub().GetPrivateData(collection, certificateId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read certificate details: %v", err)
+	}
+	if certificateDetailsJSON == nil {
+		log.Printf("CertificatePrivateDetails for %v does not exist in collection %v", certificateId, collection)
+		return nil, nil
 	}
 
 	var certificateDetails *CertificatePrivateDetails
-	err = json.Unmarshal(response.Value, &certificateDetails)
+	err = json.Unmarshal(certificateDetailsJSON, &certificateDetails)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
@@ -314,57 +298,63 @@ func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.Transactio
 	return certificateDetails, nil
 }
 
-func (s *SmartContract) ReadCertificate(ctx contractapi.TransactionContextInterface, id string) (*Certificate, error) {
-	certificates, err := s.ReadAllCertificateVersions(ctx, id)
+func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string) (*Certificate, error) {
+	if len(parentCertificateId) == 0 {
+		return nil, fmt.Errorf("certificate ID must be a non-empty string")
+	}
+	if len(newCertificateId) == 0 {
+		return nil, fmt.Errorf("certificate ID must be a non-empty string")
+	}
+
+	newCertificate, err := s.ReadCertificate(ctx, newCertificateId)
 	if err != nil {
 		return nil, err
 	}
-	if len(certificates) == 0 {
-		return nil, fmt.Errorf("certificate %v does not exist", id)
+	if newCertificate != nil {
+		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
 	}
 
-	return newestCertificate(certificates), nil
-}
-
-func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInterface, id string) error {
-	if len(id) == 0 {
-		return fmt.Errorf("certificate ID must be a non-empty string")
-	}
-
-	err := verifyClientOrgMatchesPeerOrg(ctx)
+	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
-		return fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
+		return nil, fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
 	}
 
-	certificate, err := s.ReadCertificate(ctx, id)
+	log.Printf("Revoking Certificate: %v", parentCertificateId)
 
-	ownerCollection, err := getCollectionName(ctx)
+	valAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, parentCertificateId)
 	if err != nil {
-		return fmt.Errorf("failed to get collection name: %v", err)
+		return nil, fmt.Errorf("failed to get certificate: %v", err)
+	}
+	if valAsBytes == nil {
+		return nil, fmt.Errorf("certificate %v not found", parentCertificateId)
 	}
 
-	certificate.Type = "RevokedCertificate"
-	newVersion, err := strconv.Atoi(certificate.Version)
+	var certificate *Certificate
+	err = json.Unmarshal(valAsBytes, &certificate)
 	if err != nil {
-		return fmt.Errorf("failed to parse certificate version: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
-	certificate.Version = strconv.Itoa(newVersion + 1)
+
+	if certificate.Type == revokedType {
+		return nil, fmt.Errorf("certificate %v is already revoked", parentCertificateId)
+	}
+
+	certificate.Type = revokedType
+	certificate.ParentCertificateId = parentCertificateId
+	certificate.CertificateId = newCertificateId
+	certificate.NumChanged = increaseNumChanged(certificate.NumChanged)
 
 	certificateJSONasBytes, err := json.Marshal(certificate)
 	if err != nil {
-		return fmt.Errorf("failed to marshal certificate into JSON: %v", err)
+		return nil, fmt.Errorf("failed to marshal certificate into JSON: %v", err)
 	}
 
-	certificateId, err := ctx.GetStub().CreateCompositeKey("certificate", []string{certificate.CertificateId, certificate.Version})
+	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
 	if err != nil {
-		return fmt.Errorf("failed to create composite key: %v", err)
-	}
-	err = ctx.GetStub().PutPrivateData(ownerCollection, certificateId, certificateJSONasBytes)
-	if err != nil {
-		return fmt.Errorf("failed to put certificate into private data collecton: %v", err)
+		return nil, fmt.Errorf("failed to put certificate into private data collecton: %v", err)
 	}
 
-	return nil
+	return certificate, nil
 }
 
 // getCollectionName is an internal helper function to get collection of submitting client identity.
@@ -412,12 +402,8 @@ func submittingClientIdentity(ctx contractapi.TransactionContextInterface) (stri
 	return string(decodeID), nil
 }
 
-func newestCertificate(certificates []*Certificate) *Certificate {
-	var newest *Certificate
-	for _, certificate := range certificates {
-		if newest == nil || certificate.Version > newest.Version {
-			newest = certificate
-		}
-	}
-	return newest
+func increaseNumChanged(numChanged string) string {
+	numChangedInt, _ := strconv.Atoi(numChanged)
+	numChangedInt++
+	return strconv.Itoa(numChangedInt)
 }
