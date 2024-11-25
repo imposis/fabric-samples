@@ -206,10 +206,7 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 		return nil, fmt.Errorf("Change certificate validity cannot be performed: Error %v", err)
 	}
 
-	newCertificate, err := s.ReadCertificate(ctx, newCertificateId)
-	if err != nil {
-		return nil, err
-	}
+	newCertificate, _ := s.ReadCertificate(ctx, newCertificateId)
 	if newCertificate != nil {
 		return nil, fmt.Errorf("certificate with id %v already exists", newCertificateId)
 	}
@@ -300,16 +297,12 @@ func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInte
 		return nil, fmt.Errorf("certificate ID must be a non-empty string")
 	}
 
-	newCertificate, err := s.ReadCertificate(ctx, newCertificateId)
-	if err != nil {
-		return nil, err
-	}
-
+	newCertificate, _ := s.ReadCertificate(ctx, newCertificateId)
 	if newCertificate != nil {
 		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
 	}
 
-	err = verifyClientOrgMatchesPeerOrg(ctx)
+	err := verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("RevokeCertificate cannot be performed: Error %v", err)
 	}
