@@ -1,0 +1,15 @@
+{
+  "identities": [
+    { "role": { "name": "peer", "mspId": "Org1MSP" } },
+    { "role": { "name": "peer", "mspId": "Org2MSP" } },
+  ],
+  "policy": {
+    "n_out_of": {
+      "n": 2,   // Number of required endorsements (90% threshold)
+      "rules": [
+        { "signed_by": 0 },
+        { "signed_by": 1 },
+      ]
+    }
+  }
+}

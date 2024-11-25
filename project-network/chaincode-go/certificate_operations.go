@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"strconv"
@@ -11,10 +13,6 @@ import (
 	"github.com/hyperledger/fabric-chaincode-go/v2/shim"
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
-
-//TODO: Handle admin only write
-//TODO: Handle admin only chaincode approval
-//TODO: Check compositeKey options that work...
 
 const certificateCollection string = "certificateCollection"
 
@@ -151,7 +149,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 		ParentCertificateId: "",
 		NumChanged:          "0",
 		Issuer:              clientID,
-		Owner:               certificateInput.Owner,
+		Owner:               decodeCert(certificateInput.Owner),
 	}
 	certificateJSONasBytes, err := json.Marshal(certificate)
 	if err != nil {
@@ -195,7 +193,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	return nil
 }
 
-func (s *SmartContract) ChangeCertificateValidUntil(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
+func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
 	log.Printf("ChangeCertificateValidUntil: collection %v, ID %v", certificateCollection, parentCertificateId)
 
 	certificate, err := s.ReadCertificate(ctx, parentCertificateId)
@@ -406,4 +404,20 @@ func increaseNumChanged(numChanged string) string {
 	numChangedInt, _ := strconv.Atoi(numChanged)
 	numChangedInt++
 	return strconv.Itoa(numChangedInt)
+}
+
+func decodeCert(certPEM string) string {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return certPEM
+	}
+
+	// Parse the certificate
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return certPEM
+	}
+
+	// Print certificate details
+	return fmt.Sprintf("x509::%s::%s", cert.Subject, cert.Issuer)
 }
