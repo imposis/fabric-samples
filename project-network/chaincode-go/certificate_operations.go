@@ -20,8 +20,6 @@ const revokedType string = "revoked"
 const validityChanged string = "validityChange"
 const certificateType string = "certificate"
 
-const certIndex string = "parentCertificateId~numChanged"
-
 // SmartContract
 type SmartContract struct {
 	contractapi.Contract
@@ -119,7 +117,6 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	if err != nil {
 		return fmt.Errorf("failed to get certificate: %v", err)
 	} else if certificateAsBytes != nil {
-		fmt.Println("Certificate already exists: " + certificateInput.CertificateId)
 		return fmt.Errorf("this certificate already exists: " + certificateInput.CertificateId)
 	}
 
@@ -146,7 +143,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 		CertDescription:     certificateInput.CertDescription,
 		ValidFrom:           certificateInput.ValidFrom,
 		ValidUntil:          certificateInput.ValidUntil,
-		ParentCertificateId: "",
+		ParentCertificateId: certificateInput.CertificateId,
 		NumChanged:          "0",
 		Issuer:              clientID,
 		Owner:               decodeCert(certificateInput.Owner),
@@ -163,7 +160,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 
 	err = ctx.GetStub().PutPrivateData(certificateCollection, certificateInput.CertificateId, certificateJSONasBytes)
 	if err != nil {
-		return fmt.Errorf("failed to put certificate into private data collecton: %v", err)
+		return fmt.Errorf("failed to put certificate into private data collection: %v", err)
 	}
 
 	// Save certificate details to collection visible to owning organization
@@ -194,19 +191,19 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 }
 
 func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
-	log.Printf("ChangeCertificateValidUntil: collection %v, ID %v", certificateCollection, parentCertificateId)
+	log.Printf("ChangeCertificateValidity: collection %v, ID %v", certificateCollection, parentCertificateId)
 
 	certificate, err := s.ReadCertificate(ctx, parentCertificateId)
 	if err != nil {
 		return nil, err
 	}
 	if certificate == nil {
-		return nil, fmt.Errorf("certificate %v does not exist", parentCertificateId)
+		return nil, fmt.Errorf("Parent certificate %v does not exist", parentCertificateId)
 	}
 
 	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
+		return nil, fmt.Errorf("Change certificate validity cannot be performed: Error %v", err)
 	}
 
 	newCertificate, err := s.ReadCertificate(ctx, newCertificateId)
@@ -214,11 +211,11 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 		return nil, err
 	}
 	if newCertificate != nil {
-		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
+		return nil, fmt.Errorf("certificate with id %v already exists", newCertificateId)
 	}
 
 	if certificate.Type == revokedType {
-		return nil, fmt.Errorf("certificate is revoked")
+		return nil, fmt.Errorf("Parent certificate is revoked already")
 	}
 
 	validUntilDate, err := time.Parse("2006-01-02", validUntil)
@@ -226,13 +223,13 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 		return nil, fmt.Errorf("failed to parse validUntil input argument: %v", err)
 	}
 
-	certificateValidFromDate, err := time.Parse("2006-01-02", validFrom)
+	validFromDate, err := time.Parse("2006-01-02", validFrom)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificateValidFromDate: %v", err)
+		return nil, fmt.Errorf("failed to parse validFromDate: %v", err)
 	}
 
-	if validUntilDate.Before(certificateValidFromDate) {
-		return nil, fmt.Errorf("New validUntil date must be after validFrom date. %v < %v", validUntilDate, certificateValidFromDate)
+	if validUntilDate.Before(validFromDate) {
+		return nil, fmt.Errorf("New validUntil date must be after validFrom date. %v < %v", validUntilDate, validFromDate)
 	}
 
 	certificate.ValidUntil = validUntil
@@ -249,7 +246,7 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 
 	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to put certificate into private data collecton: %v", err)
+		return nil, fmt.Errorf("failed to put certificate into collection: %v", err)
 	}
 
 	return certificate, nil
@@ -263,8 +260,7 @@ func (s *SmartContract) ReadCertificate(ctx contractapi.TransactionContextInterf
 	}
 
 	if certificateJSON == nil {
-		log.Printf("%v does not exist in collection %v", certificateId, certificateCollection)
-		return nil, nil
+		return nil, fmt.Errorf("%v does not exist in collection %v", certificateId, certificateCollection)
 	}
 
 	var certificate *Certificate
@@ -308,27 +304,28 @@ func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInte
 	if err != nil {
 		return nil, err
 	}
+
 	if newCertificate != nil {
 		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
 	}
 
 	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("RemoveCertificate cannot be performed: Error %v", err)
+		return nil, fmt.Errorf("RevokeCertificate cannot be performed: Error %v", err)
 	}
 
 	log.Printf("Revoking Certificate: %v", parentCertificateId)
 
-	valAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, parentCertificateId)
+	certificateJSON, err := ctx.GetStub().GetPrivateData(certificateCollection, parentCertificateId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get certificate: %v", err)
 	}
-	if valAsBytes == nil {
+	if certificateJSON == nil {
 		return nil, fmt.Errorf("certificate %v not found", parentCertificateId)
 	}
 
 	var certificate *Certificate
-	err = json.Unmarshal(valAsBytes, &certificate)
+	err = json.Unmarshal(certificateJSON, &certificate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
 	}
@@ -349,7 +346,7 @@ func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInte
 
 	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to put certificate into private data collecton: %v", err)
+		return nil, fmt.Errorf("failed to put certificate into collection: %v", err)
 	}
 
 	return certificate, nil
@@ -388,6 +385,8 @@ func verifyClientOrgMatchesPeerOrg(ctx contractapi.TransactionContextInterface) 
 	return nil
 }
 
+// Gets the MSP ID of submitting client identity
+// Used for Issuer in Certificate
 func submittingClientIdentity(ctx contractapi.TransactionContextInterface) (string, error) {
 	b64ID, err := ctx.GetClientIdentity().GetID()
 	if err != nil {
@@ -400,12 +399,16 @@ func submittingClientIdentity(ctx contractapi.TransactionContextInterface) (stri
 	return string(decodeID), nil
 }
 
+// increaseNumChanged is an internal helper function to increase numChanged of certificate
 func increaseNumChanged(numChanged string) string {
 	numChangedInt, _ := strconv.Atoi(numChanged)
 	numChangedInt++
 	return strconv.Itoa(numChangedInt)
 }
 
+// decodeCert is an internal helper function to decode certificate of owner for storing in certificate
+// Hyperledger uses x509::subject::issuer certificate and format, expected to be passed a correctly formatted certificate string
+// If not correctly formatted, returns the original string and stores it regardles
 func decodeCert(certPEM string) string {
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil || block.Type != "CERTIFICATE" {
