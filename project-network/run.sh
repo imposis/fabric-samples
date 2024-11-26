@@ -15,7 +15,7 @@ cd ../test-network/
 ./network.sh up createChannel -ca -s couchdb
 
 # Deploying chaincode
-./network.sh deployCC -ccn private -ccp ../project-network/chaincode-go/ -ccl go -ccep "OR('Org2MSP.peer','Org2MSP.peer')" -cccg ../project-network/chaincode-go/collections_config.json
+./network.sh deployCC -ccn private -ccp ../project-network/chaincode-go/ -ccl go -ccep "OR('Org1MSP.peer','Org2MSP.peer')" -cccg ../project-network/chaincode-go/collections_config.json
 
 # Registering identities
 export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com; fabric-ca-client register --caname ca-org1 --id.name groot --id.secret grootpw --id.type admin --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; fabric-ca-client enroll -u https://groot:grootpw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp/config.yaml";
