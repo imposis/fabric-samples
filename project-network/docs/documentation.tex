@@ -138,14 +138,17 @@ The chaincode definition is available here: \url{https://github.com/imposis/fabr
 
 \begin{lstlisting}[language=Golang]
 type Certificate struct {
-	Type            string `json:"objectType"`
-	CertificateId   string `json:"certificateId"`
-	NameSurname     string `json:"nameSurname"`
-	CertType        string `json:"certType"`
-	CertDescription string `json:"certDescription"`
-	ValidFrom       string `json:"validFrom"`
-	ValidUntil      string `json:"validUntil"`
-	Owner           string `json:"owner"`
+	Type                string `json:"objectType"`
+	CertificateId       string `json:"certificateId"`
+	ParentCertificateId string `json:"parentCertificateId"`
+	NumChanged          string `json:"numChanged"`
+	NameSurname         string `json:"nameSurname"`
+	CertType            string `json:"certType"`
+	CertDescription     string `json:"certDescription"`
+	ValidFrom           string `json:"validFrom"`
+	ValidUntil          string `json:"validUntil"`
+	Owner               string `json:"owner"`
+	Issuer              string `json:"issuer"`
 }
 
 type CertificatePrivateDetails struct {
@@ -165,20 +168,20 @@ When it is passed from client application we can check if the block containing t
 
 \begin{lstlisting}[language=Golang]
 func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInterface) error
-func (s *SmartContract) ChangeCertificateValidUntil(ctx contractapi.TransactionContextInterface, certificateId string, validUntil string) error
+func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error)
 func (s *SmartContract) ReadCertificate(ctx contractapi.TransactionContextInterface, certificateId string) (*Certificate, error)
 func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.TransactionContextInterface, collection string, certificateId string) (*CertificatePrivateDetails, error)
-func (s *SmartContract) RemoveCertificate(ctx contractapi.TransactionContextInterface, certificateId string) error
+func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string) (*Certificate, error)
 \end{lstlisting}
 
 These methods, defined for the SmartContract interface are available for use for operations on the blockchain.
 
 \begin{itemize}
     \item \texttt{CreateCertificate} - method is used to create a new certificate. Based on the user stores private data to the collection of the organization of the user.
-    \item \texttt{ChangeCertificateValidUntil} - method is used to change the validUntil field of the certificate. This is used to extend or reduce the validity of the certificate.
+    \item \texttt{ChangeCertificateValidity} - method is used to change the validity of the certificate. This is used to extend or reduce the validity of the certificate. It creates a new block with reference to the parent block
     \item \texttt{ReadCertificate} - method is used to read the public data of the certificate. Reads from the public collection.
     \item \texttt{ReadCertificatePrivateDetails} - method is used to read the private data of the certificate. Data stored only in the private collection of the organization of the user. Returns empty response when called by another organization
-    \item \texttt{RemoveCertificate} - method is used to remove the certificate from the blockchain.
+    \item \texttt{RevokeCertificate} - method is used to revoke the certificate. Creates a new block with reference to the parent block.
 \end{itemize}
 
 \subsection{Helper functions}
@@ -187,15 +190,19 @@ These methods, defined for the SmartContract interface are available for use for
 func getCollectionName(ctx contractapi.TransactionContextInterface) (string, error)
 func verifyClientOrgMatchesPeerOrg(ctx contractapi.TransactionContextInterface) error
 func submittingClientIdentity(ctx contractapi.TransactionContextInterface) (string, error)
+func increaseNumChanged(numChanged string) string
+func decodeCert(certPEM string) string
 \end{lstlisting}
 
 \begin{itemize}
     \item \texttt{getCollectionName} - returns the private collection name of the organization of the user.
     \item \texttt{verifyClientOrgMatchesPeerOrg} - verifies that the organization of the user matches the organization of the peer.
     \item \texttt{submittingClientIdentity} - returns the id of the used who invoked the transation.
+    \item \texttt{increaseNumChanged} - adds 1 to the numChanged field of the certificate. Used for keeping track of how many times the certificate was changed.
+    \item \texttt{decodeCert} - decodes the certificate from PEM format to string. HyperLedger uses x509 certificates in PEM format.
 \end{itemize}
 
-These functions are used in the SmartContract interface methods. Providing a functionality that can is used in multiple methods.
+These functions are used in the SmartContract interface methods. Providing a functionality that can be used in multiple methods. These are only available internaly and are not exposed to blockchain users.
 
 \newpage
 
@@ -220,8 +227,10 @@ Then we can deploy the chaincode.
 This does many steps that are needed to be split up later for production use, but in this POC it shows all the necessary steps that lead to the successful deployment of the chaincode.
 
 First it publishes the chaincode in the proposal phase.
-Then it needs to be approved by both organizations. In this example it needs to be approved by both organizations, because of the majority endorsement policy.
-When there is more than 2 organizations, the chaincode needs to be approved by more than 50\% of the organizations.
+Here we specify the endorsement policy and the collections config file. We used the provided script for the test network, but this is available as separate commmands as well.
+The endorsement policy is set to OR('Org2MSP.peer','Org2MSP.peer') which means that the chaincode needs to be approved by both organizations.
+For more organizations, the endorsement policy needs to be changed accordingly.
+Then it needs to be approved by both organizations. In this example it needs to be approved by both organizations, because of the endorsement policy.
 
 \begin{figure}[H]
     \centering
@@ -262,11 +271,12 @@ We also create certificates for both organizations, which are used for validatio
 First we create a certificate.
 
 \begin{lstlisting}[language=bash]
-export CERT_PROPERTIES=$(echo -n "{ \"objectType\": \"certificate\", \"certificateId\": \"certificate1\", \"nameSurname\": \"John Doe\", \"certType\": \"IT\", \"certDescription\": \"IT certificate very nice\", \"validFrom\": \"2024-01-01\", \"validUntil\": \"2025-01-01\", \"UID\": \"990101/1234\" }" | base64 | tr -d \\n)
+export CERT_PROPERTIES=$(echo -n "{ \"objectType\": \"certificate\",\"certificateId\": \"1\", \"parentCertificateId\": \"1\", \"numChanged\": \"1\", \"nameSurname\": \"Alice Smith\", \"certType\": \"IT\", \"certDescription\": \"IT certificate\", \"validFrom\": \"2024-01-01\", \"validUntil\": \"2025-01-01\", \"UID\": \"990101/1234\", \"owner\": \"-----BEGIN CERTIFICATE-----\\nMIICpjCCAk2gAwIBAgIUTesCsh3utg0amUu6ag6HqFAzV5owCgYIKoZIzj0EAwIw\\ncDELMAkGA1UEBhMCVVMxFzAVBgNVBAgTDk5vcnRoIENhcm9saW5hMQ8wDQYDVQQH\\nEwZEdXJoYW0xGTAXBgNVBAoTEG9yZzEuZXhhbXBsZS5jb20xHDAaBgNVBAMTE2Nh\\nLm9yZzEuZXhhbXBsZS5jb20wHhcNMjQxMTIzMTIxNTAwWhcNMjUxMTIzMTIyNTAw\\nWjBdMQswCQYDVQQGEwJVUzEXMBUGA1UECBMOTm9ydGggQ2Fyb2xpbmExFDASBgNV\\nBAoTC0h5cGVybGVkZ2VyMQ8wDQYDVQQLEwZjbGllbnQxDjAMBgNVBAMTBWFsaWNl\\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkfFsDKL1a17HB5G4wNnpvfS7SNPQ\\nko/Tqt9iKcosJWNPk5rpV2XvMY7BiswO24DnqUc7BfzbZb5axmgoNFORoKOB1zCB\\n1DAOBgNVHQ8BAf8EBAMCB4AwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQUvjoN7qqh\\niXk2/vJU3vamLolimrswHwYDVR0jBBgwFoAUw7cvR+OH4skKACi+dph+5DbAtsow\\nGgYDVR0RBBMwEYIPREVTS1RPUC1OVUZOOTQyMFgGCCoDBAUGBwgBBEx7ImF0dHJz\\nIjp7ImhmLkFmZmlsaWF0aW9uIjoiIiwiaGYuRW5yb2xsbWVudElEIjoiYWxpY2Ui\\nLCJoZi5UeXBlIjoiY2xpZW50In19MAoGCCqGSM49BAMCA0cAMEQCIGbBVMYo/seg\\nvWO4YEbe3GnoyzMZ5nPngScmkHuetzJwAiBgB79odNpJbI+WPi7UgIk1ynrcP+Jr\\nfxEFH+xXpgAbdg==\\n-----END CERTIFICATE-----\"}" | base64 | tr -d \\n)
 peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"CreateCertificate","Args":[]}' --transient "{\"certificate_properties\":\"$CERT_PROPERTIES\"}"
 \end{lstlisting}
 
 Here we defined a certificate as a base64 encoded JSON object which is then passed to the CreateCertificate method.
+We pass the owner field as the string storing the PEM encoded certificate of the certificate holder.
 
 \begin{figure}[H]
     \centering
@@ -280,8 +290,8 @@ Here we defined a certificate as a base64 encoded JSON object which is then pass
 Then we can read the certificate. Here is the result as member of Org1.
 
 \begin{lstlisting}[language=bash]
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["certificate1"]}'
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","certificate1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","1"]}'
 \end{lstlisting}
 
 \begin{figure}[H]
@@ -299,9 +309,9 @@ When \texttt{ReadCertificatePrivateDetails} is called, the private data is retur
 Here is the result as member of Org2.
 
 \begin{lstlisting}[language=bash]
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["certificate1"]}'
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org2MSPPrivateCollection","certificate1"]}'
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","certificate1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["1"]}'
+peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org2MSPPrivateCollection","1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","1"]}'
 \end{lstlisting}
 
 \begin{figure}[H]
@@ -315,11 +325,11 @@ The public data is also returned correctly.
 When \texttt{ReadCertificatePrivateDetails} is called with the private collection of Org2 we can see that the response is empty as the certificate is not stored in the private collection of Org2.
 When \texttt{ReadCertificatePrivateDetails} is called with the private collection of Org1 as member of Org2 we can see that an error is returned as the user is not authorized to access the private data of Org1.
 
-\subsection{Changing certificate valid until}
+\subsection{Changing certificate validity}
 
 \begin{lstlisting}[language=bash]
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ChangeCertificateValidUntil","Args":["certificate1", "2026-01-01"]}'
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["certificate1"]}'
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ChangeCertificateValidity","Args":["1", "2", "2025-01-01", "2026-01-01"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["2"]}'
 \end{lstlisting}
 
 \begin{figure}[H]
@@ -330,21 +340,25 @@ peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","
 \end{figure}
 
 As we can see the validity of the certificate was changed.
-The validUntil can be both increased or decreased.
-The only condition is that the new validity must be greater than the validFrom value of the certificate.
+This creates a new block with a reference to the parent block.
+The numChanged was also increased by 1.
+The validity can be both increased or decreased.
+The only thing we check is that the new validFrom date is before the new validUntil date.
+The objType is set to validityChange indicating that the validity was changed.
 
-\subsection{Certificate removal}
+\subsection{Certificate revocation}
 
 \begin{lstlisting}[language=bash]
 peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"RemoveCertificate","Args":["certificate1"]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
 \end{lstlisting}
 
 \begin{figure}[H]
-    \includegraphics[width=\textwidth]{imgs/removing_certificate_and_checking_if_exists.PNG}
+    \includegraphics[width=\textwidth]{imgs/revoking_certificate.PNG}
     \caption{Removing certificate}
     \label{fig:removingcertificate}
 \end{figure}
 
-As we can see the certificate was removed from both the public collection, which is shared between all organizations, and the private collection of the organization that issued the certificate.
+As we can see the certificate was set as revoked.
+The objType is set to revoked, indicating that the certificate was revoked.
 
 \end{document}
