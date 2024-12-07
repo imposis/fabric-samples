@@ -5,9 +5,7 @@ set -vx
 # https://hyperledger-fabric.readthedocs.io/en/latest/private_data_tutorial.html#pd-use-case
 
 # Setting environment variables
-export PATH=${PWD}/../bin:${PWD}:$PATH
-export FABRIC_CFG_PATH=$PWD/../config/
-export CORE_PEER_TLS_ENABLED=true
+export PATH=${PWD}/../bin:${PWD}:$PATH; export FABRIC_CFG_PATH=$PWD/../config/; export CORE_PEER_TLS_ENABLED=true;
 
 # Network starting and deploying
 cd ../test-network/
@@ -57,7 +55,7 @@ sleep 2
 export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com; export CORE_PEER_LOCALMSPID=Org1MSP; export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt; export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp; export CORE_PEER_ADDRESS=localhost:7051;
 
 # Changing certificate validity
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ChangeCertificateValidity","Args":["1", "2", "2025-01-01", "2026-01-01"]}'
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ChangeCertificateValidity","Args":["1", "2025-01-01", "2026-01-01"]}'
 sleep 2
 peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["2"]}'
 sleep 2
@@ -71,4 +69,16 @@ peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","
 sleep 2
 # Query private data as Org1
 peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","1"]}'
+sleep 2
+
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function": "GetAllCertificates","Args":[]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+sleep 2
+
+peer chaincode query -C mychannel -n private -c '{"function":"GetAllCertificates","Args":[]}'
+sleep 2
+
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function": "GetCertificatesByPartialCompositeKey","Args":["1"]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+sleep 2
+
+peer chaincode query -C mychannel -n private -c '{"function":"GetCertificatesByPartialCompositeKey","Args":["1"]}'
 sleep 2

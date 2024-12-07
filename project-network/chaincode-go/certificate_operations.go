@@ -20,6 +20,8 @@ const revokedType string = "revoked"
 const validityChanged string = "validityChange"
 const certificateType string = "certificate"
 
+const compositeKeyType = "certificate"
+
 // SmartContract
 type SmartContract struct {
 	contractapi.Contract
@@ -158,7 +160,9 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	// Look for container name like dev-peer0.org1.example.com-{chaincodename_version}-xyz
 	log.Printf("CreateCertificate Put: collection %v, ID %v, owner %v", certificateCollection, certificateInput.CertificateId, clientID)
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, certificateInput.CertificateId, certificateJSONasBytes)
+	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{parentCertificateId, certificate.CertificateId})
+
+	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
 	if err != nil {
 		return fmt.Errorf("failed to put certificate into private data collection: %v", err)
 	}
@@ -190,7 +194,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	return nil
 }
 
-func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
+func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
 	log.Printf("ChangeCertificateValidity: collection %v, ID %v", certificateCollection, parentCertificateId)
 
 	certificate, err := s.ReadCertificate(ctx, parentCertificateId)
@@ -204,11 +208,6 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Change certificate validity cannot be performed: Error %v", err)
-	}
-
-	newCertificate, _ := s.ReadCertificate(ctx, newCertificateId)
-	if newCertificate != nil {
-		return nil, fmt.Errorf("certificate with id %v already exists", newCertificateId)
 	}
 
 	if certificate.Type == revokedType {
@@ -231,7 +230,7 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 
 	certificate.ValidUntil = validUntil
 	certificate.ValidFrom = validFrom
-	certificate.CertificateId = newCertificateId
+	certificate.CertificateId = ctx.GetStub().GetTxID()
 	certificate.Type = validityChanged
 	certificate.ParentCertificateId = parentCertificateId
 	certificate.NumChanged = increaseNumChanged(certificate.NumChanged)
@@ -241,7 +240,9 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 		return nil, fmt.Errorf("failed to marshal certificate into JSON: %v", err)
 	}
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
+	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{parentCertificateId, certificate.CertificateId})
+
+	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put certificate into collection: %v", err)
 	}
@@ -358,6 +359,58 @@ func getCollectionName(ctx contractapi.TransactionContextInterface) (string, err
 	orgCollection := clientMSPID + "PrivateCollection"
 
 	return orgCollection, nil
+}
+
+func (s *SmartContract) GetAllCertificates(ctx contractapi.TransactionContextInterface) ([]*Certificate, error) {
+	// range query with empty string for startKey and endKey does an
+	// open-ended query of all assets in the chaincode namespace.
+	resultsIterator, err := ctx.GetStub().GetPrivateDataByRange(certificateCollection, "", "")
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var certificates []*Certificate
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var certificate Certificate
+		err = json.Unmarshal(queryResponse.Value, &certificate)
+		if err != nil {
+			return nil, err
+		}
+		certificates = append(certificates, &certificate)
+	}
+
+	return certificates, nil
+}
+
+func (s *SmartContract) GetCertificatesByPartialCompositeKey(ctx contractapi.TransactionContextInterface, partialCompositeKey string) ([]*Certificate, error) {
+	resultsIterator, err := ctx.GetStub().GetPrivateDataByPartialCompositeKey(certificateCollection, compositeKeyType, []string{partialCompositeKey})
+	if err != nil {
+		return nil, err
+	}
+	defer resultsIterator.Close()
+
+	var certificates []*Certificate
+	for resultsIterator.HasNext() {
+		queryResponse, err := resultsIterator.Next()
+		if err != nil {
+			return nil, err
+		}
+
+		var certificate Certificate
+		err = json.Unmarshal(queryResponse.Value, &certificate)
+		if err != nil {
+			return nil, err
+		}
+		certificates = append(certificates, &certificate)
+	}
+
+	return certificates, nil
 }
 
 // verifyClientOrgMatchesPeerOrg is an internal function used verify client org id and matches peer org id.
