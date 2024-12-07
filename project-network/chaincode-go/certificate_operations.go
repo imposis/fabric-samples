@@ -14,8 +14,6 @@ import (
 	"github.com/hyperledger/fabric-contract-api-go/v2/contractapi"
 )
 
-const certificateCollection string = "certificateCollection"
-
 const revokedType string = "revoked"
 const validityChanged string = "validityChange"
 const certificateType string = "certificate"
@@ -39,6 +37,7 @@ type Certificate struct {
 	ValidUntil          string `json:"validUntil"`
 	Owner               string `json:"owner"`
 	Issuer              string `json:"issuer"`
+	IssuerOrg           string `json:"issuerOrg"`
 }
 
 type CertificatePrivateDetails struct {
@@ -47,6 +46,10 @@ type CertificatePrivateDetails struct {
 }
 
 func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInterface) error {
+	if err := checkClientRole(ctx, "admin"); err != nil {
+		return err
+	}
+
 	// Get new certificate from transient map
 	transientMap, err := ctx.GetStub().GetTransient()
 	if err != nil {
@@ -114,18 +117,23 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 		return fmt.Errorf("validFrom must be before validUntil")
 	}
 
-	// Check if certificate already exists
-	certificateAsBytes, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateInput.CertificateId)
-	if err != nil {
-		return fmt.Errorf("failed to get certificate: %v", err)
-	} else if certificateAsBytes != nil {
-		return fmt.Errorf("this certificate already exists: " + certificateInput.CertificateId)
+	certificateCheck, _ := s.ReadNewestCertificateByParentId(ctx, certificateInput.CertificateId)
+	if certificateCheck != nil {
+		return fmt.Errorf("Certificate %v already exists", certificateInput.CertificateId)
 	}
 
 	// Get ID of submitting client identity
 	clientID, err := submittingClientIdentity(ctx)
 	if err != nil {
 		return err
+	}
+
+	issuerOrg, found, err := ctx.GetClientIdentity().GetAttributeValue("org")
+	if err != nil {
+		return fmt.Errorf("failed to get client's org attribute: %v", err)
+	}
+	if !found {
+		return fmt.Errorf("client does not have the org assigned: %s", issuerOrg)
 	}
 
 	// Verify that the client is submitting request to peer in their organization
@@ -148,6 +156,7 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 		ParentCertificateId: certificateInput.CertificateId,
 		NumChanged:          "0",
 		Issuer:              clientID,
+		IssuerOrg:           issuerOrg,
 		Owner:               decodeCert(certificateInput.Owner),
 	}
 	certificateJSONasBytes, err := json.Marshal(certificate)
@@ -158,11 +167,11 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 	// Save certificate to private data collection
 	// Typical logger, logs to stdout/file in the fabric managed docker container, running this chaincode
 	// Look for container name like dev-peer0.org1.example.com-{chaincodename_version}-xyz
-	log.Printf("CreateCertificate Put: collection %v, ID %v, owner %v", certificateCollection, certificateInput.CertificateId, clientID)
+	log.Printf("CreateCertificate Put: ID %v, owner %v", certificateInput.CertificateId, clientID)
 
-	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{parentCertificateId, certificate.CertificateId})
+	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{certificate.ParentCertificateId, certificate.CertificateId})
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
+	err = ctx.GetStub().PutState(compositeKey, certificateJSONasBytes)
 	if err != nil {
 		return fmt.Errorf("failed to put certificate into private data collection: %v", err)
 	}
@@ -195,9 +204,13 @@ func (s *SmartContract) CreateCertificate(ctx contractapi.TransactionContextInte
 }
 
 func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionContextInterface, parentCertificateId string, validFrom string, validUntil string) (*Certificate, error) {
-	log.Printf("ChangeCertificateValidity: collection %v, ID %v", certificateCollection, parentCertificateId)
+	log.Printf("ChangeCertificateValidity: ID %v", parentCertificateId)
 
-	certificate, err := s.ReadCertificate(ctx, parentCertificateId)
+	if err := checkClientRole(ctx, "admin"); err != nil {
+		return nil, err
+	}
+
+	certificate, err := s.ReadNewestCertificateByParentId(ctx, parentCertificateId)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +221,10 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("Change certificate validity cannot be performed: Error %v", err)
+	}
+
+	if err = checkClientOrg(ctx, certificate.IssuerOrg); err != nil {
+		return nil, err
 	}
 
 	if certificate.Type == revokedType {
@@ -232,7 +249,6 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 	certificate.ValidFrom = validFrom
 	certificate.CertificateId = ctx.GetStub().GetTxID()
 	certificate.Type = validityChanged
-	certificate.ParentCertificateId = parentCertificateId
 	certificate.NumChanged = increaseNumChanged(certificate.NumChanged)
 
 	certificateJSONasBytes, err := json.Marshal(certificate)
@@ -242,7 +258,7 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 
 	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{parentCertificateId, certificate.CertificateId})
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, compositeKey, certificateJSONasBytes)
+	err = ctx.GetStub().PutState(compositeKey, certificateJSONasBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put certificate into collection: %v", err)
 	}
@@ -250,22 +266,18 @@ func (s *SmartContract) ChangeCertificateValidity(ctx contractapi.TransactionCon
 	return certificate, nil
 }
 
-func (s *SmartContract) ReadCertificate(ctx contractapi.TransactionContextInterface, certificateId string) (*Certificate, error) {
-	log.Printf("ReadCertificate: collection %v, ID %v", certificateCollection, certificateId)
-	certificateJSON, err := ctx.GetStub().GetPrivateData(certificateCollection, certificateId)
+func (s *SmartContract) ReadNewestCertificateByParentId(ctx contractapi.TransactionContextInterface, parentCertificateId string) (*Certificate, error) {
+	log.Printf("ReadNewestCertificateByParentId: ID %v", parentCertificateId)
+	certificates, err := s.GetCertificatesByPartialCompositeKey(ctx, parentCertificateId)
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to read from private data collection: %v", err)
+		return nil, err
+	}
+	if len(certificates) == 0 {
+		return nil, fmt.Errorf("Certificate %v does not exist", parentCertificateId)
 	}
 
-	if certificateJSON == nil {
-		return nil, fmt.Errorf("%v does not exist in collection %v", certificateId, certificateCollection)
-	}
-
-	var certificate *Certificate
-	err = json.Unmarshal(certificateJSON, &certificate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
-	}
+	certificate := getNewestCertificateChange(certificates)
 
 	return certificate, nil
 }
@@ -290,47 +302,40 @@ func (s *SmartContract) ReadCertificatePrivateDetails(ctx contractapi.Transactio
 	return certificateDetails, nil
 }
 
-func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInterface, parentCertificateId string, newCertificateId string) (*Certificate, error) {
+func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInterface, parentCertificateId string) (*Certificate, error) {
+	if err := checkClientRole(ctx, "admin"); err != nil {
+		return nil, err
+	}
+
 	if len(parentCertificateId) == 0 {
 		return nil, fmt.Errorf("certificate ID must be a non-empty string")
 	}
-	if len(newCertificateId) == 0 {
-		return nil, fmt.Errorf("certificate ID must be a non-empty string")
+
+	certificate, err := s.ReadNewestCertificateByParentId(ctx, parentCertificateId)
+	if err != nil {
+		return nil, err
+	}
+	if certificate == nil {
+		return nil, fmt.Errorf("certificate %v does not exist", parentCertificateId)
 	}
 
-	newCertificate, _ := s.ReadCertificate(ctx, newCertificateId)
-	if newCertificate != nil {
-		return nil, fmt.Errorf("certificate %v already exists", newCertificateId)
+	if err = checkClientOrg(ctx, certificate.IssuerOrg); err != nil {
+		return nil, err
 	}
 
-	err := verifyClientOrgMatchesPeerOrg(ctx)
+	err = verifyClientOrgMatchesPeerOrg(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("RevokeCertificate cannot be performed: Error %v", err)
 	}
 
 	log.Printf("Revoking Certificate: %v", parentCertificateId)
 
-	certificateJSON, err := ctx.GetStub().GetPrivateData(certificateCollection, parentCertificateId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get certificate: %v", err)
-	}
-	if certificateJSON == nil {
-		return nil, fmt.Errorf("certificate %v not found", parentCertificateId)
-	}
-
-	var certificate *Certificate
-	err = json.Unmarshal(certificateJSON, &certificate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
-	}
-
 	if certificate.Type == revokedType {
 		return nil, fmt.Errorf("certificate %v is already revoked", parentCertificateId)
 	}
 
 	certificate.Type = revokedType
-	certificate.ParentCertificateId = parentCertificateId
-	certificate.CertificateId = newCertificateId
+	certificate.CertificateId = ctx.GetStub().GetTxID()
 	certificate.NumChanged = increaseNumChanged(certificate.NumChanged)
 
 	certificateJSONasBytes, err := json.Marshal(certificate)
@@ -338,7 +343,9 @@ func (s *SmartContract) RevokeCertificate(ctx contractapi.TransactionContextInte
 		return nil, fmt.Errorf("failed to marshal certificate into JSON: %v", err)
 	}
 
-	err = ctx.GetStub().PutPrivateData(certificateCollection, newCertificateId, certificateJSONasBytes)
+	compositeKey, err := ctx.GetStub().CreateCompositeKey(compositeKeyType, []string{parentCertificateId, certificate.CertificateId})
+
+	err = ctx.GetStub().PutState(compositeKey, certificateJSONasBytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to put certificate into collection: %v", err)
 	}
@@ -361,35 +368,8 @@ func getCollectionName(ctx contractapi.TransactionContextInterface) (string, err
 	return orgCollection, nil
 }
 
-func (s *SmartContract) GetAllCertificates(ctx contractapi.TransactionContextInterface) ([]*Certificate, error) {
-	// range query with empty string for startKey and endKey does an
-	// open-ended query of all assets in the chaincode namespace.
-	resultsIterator, err := ctx.GetStub().GetPrivateDataByRange(certificateCollection, "", "")
-	if err != nil {
-		return nil, err
-	}
-	defer resultsIterator.Close()
-
-	var certificates []*Certificate
-	for resultsIterator.HasNext() {
-		queryResponse, err := resultsIterator.Next()
-		if err != nil {
-			return nil, err
-		}
-
-		var certificate Certificate
-		err = json.Unmarshal(queryResponse.Value, &certificate)
-		if err != nil {
-			return nil, err
-		}
-		certificates = append(certificates, &certificate)
-	}
-
-	return certificates, nil
-}
-
 func (s *SmartContract) GetCertificatesByPartialCompositeKey(ctx contractapi.TransactionContextInterface, partialCompositeKey string) ([]*Certificate, error) {
-	resultsIterator, err := ctx.GetStub().GetPrivateDataByPartialCompositeKey(certificateCollection, compositeKeyType, []string{partialCompositeKey})
+	resultsIterator, err := ctx.GetStub().GetStateByPartialCompositeKey(compositeKeyType, []string{partialCompositeKey})
 	if err != nil {
 		return nil, err
 	}
@@ -469,4 +449,42 @@ func decodeCert(certPEM string) string {
 
 	// Print certificate details
 	return fmt.Sprintf("x509::%s::%s", cert.Subject, cert.Issuer)
+}
+
+// getNewestCertificateChange is an internal helper function to get the newest certificate change
+// returns the newest certificate
+func getNewestCertificateChange(certificates []*Certificate) *Certificate {
+	var newestCertificate *Certificate
+	for _, certificate := range certificates {
+		if newestCertificate == nil || certificate.NumChanged > newestCertificate.NumChanged {
+			newestCertificate = certificate
+		}
+	}
+	return newestCertificate
+}
+
+func checkClientRole(ctx contractapi.TransactionContextInterface, requiredRole string) error {
+	role, found, err := ctx.GetClientIdentity().GetAttributeValue("role")
+	if err != nil {
+		return fmt.Errorf("failed to get client's role attribute: %v", err)
+	}
+
+	if !found || role != requiredRole {
+		return fmt.Errorf("client does not have the required role: %s", requiredRole)
+	}
+
+	return nil
+}
+
+func checkClientOrg(ctx contractapi.TransactionContextInterface, requiredOrg string) error {
+	org, found, err := ctx.GetClientIdentity().GetAttributeValue("org")
+	if err != nil {
+		return fmt.Errorf("failed to get client's org attribute: %v", err)
+	}
+
+	if !found || org != requiredOrg {
+		return fmt.Errorf("client does not have the required org: %s", requiredOrg)
+	}
+
+	return nil
 }

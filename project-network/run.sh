@@ -16,7 +16,7 @@ cd ../test-network/
 ./network.sh deployCC -ccn private -ccp ../project-network/chaincode-go/ -ccl go -ccep "OR('Org1MSP.peer','Org2MSP.peer')" -cccg ../project-network/chaincode-go/collections_config.json
 
 # Registering identities
-export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com; fabric-ca-client register --caname ca-org1 --id.name groot --id.secret grootpw --id.type admin --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; fabric-ca-client enroll -u https://groot:grootpw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp/config.yaml";
+export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com; fabric-ca-client register --caname ca-org1 --id.name groot --id.secret grootpw --id.type admin --id.attrs "role=admin:ecert,org=org1:ecert" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; fabric-ca-client enroll -u https://groot:grootpw@localhost:7054 --caname ca-org1 -M "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org1/tls-cert.pem"; cp "${PWD}/organizations/peerOrganizations/org1.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp/config.yaml";
 
 # Org1
 export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example.com; export CORE_PEER_LOCALMSPID=Org1MSP; export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt; export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org1.example.com/users/groot@org1.example.com/msp; export CORE_PEER_ADDRESS=localhost:7051;
@@ -28,7 +28,7 @@ peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.exa
 sleep 2
 
 # Certificate query as Org1
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadNewestCertificateByParentId","Args":["1"]}'
 sleep 2
 
 # Query private data as Org1
@@ -36,13 +36,13 @@ peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePri
 sleep 2
 
 # Org2
-export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org2.example.com/; fabric-ca-client register --caname ca-org2 --id.name bob --id.secret bobpw --id.type client --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"; fabric-ca-client enroll -u https://bob:bobpw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/users/bob@org2.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"; cp "${PWD}/organizations/peerOrganizations/org2.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org2.example.com/users/bob@org2.example.com/msp/config.yaml";
+export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org2.example.com/; fabric-ca-client register --caname ca-org2 --id.name bob --id.secret bobpw --id.type client --id.attrs "role=client:ecert,org=org2:ecert" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"; fabric-ca-client enroll -u https://bob:bobpw@localhost:8054 --caname ca-org2 -M "${PWD}/organizations/peerOrganizations/org2.example.com/users/bob@org2.example.com/msp" --tls.certfiles "${PWD}/organizations/fabric-ca/org2/tls-cert.pem"; cp "${PWD}/organizations/peerOrganizations/org2.example.com/msp/config.yaml" "${PWD}/organizations/peerOrganizations/org2.example.com/users/bob@org2.example.com/msp/config.yaml";
 
 export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org2.example.com/; export CORE_PEER_LOCALMSPID=Org2MSP; export CORE_PEER_TLS_ROOTCERT_FILE=${PWD}/organizations/peerOrganizations/org2.example.com/peers/peer0.org2.example.com/tls/ca.crt; export CORE_PEER_MSPCONFIGPATH=${PWD}/organizations/peerOrganizations/org2.example.com/users/bob@org2.example.com/msp; export CORE_PEER_ADDRESS=localhost:9051;
 
 
 # Certificate query as Org2
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["1"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadNewestCertificateByParentId","Args":["1"]}'
 sleep 2
 # Checking if private data exist in Org2
 peer chaincode query -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org2MSPPrivateCollection","1"]}'
@@ -57,28 +57,20 @@ export FABRIC_CA_CLIENT_HOME=${PWD}/organizations/peerOrganizations/org1.example
 # Changing certificate validity
 peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"ChangeCertificateValidity","Args":["1", "2025-01-01", "2026-01-01"]}'
 sleep 2
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["2"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadNewestCertificateByParentId","Args":["1"]}'
 sleep 2
 
 # Revoking certificate
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"RevokeCertificate","Args":["2", "3"]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
+peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function":"RevokeCertificate","Args":["1"]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
 sleep 2
 
 # Certificate query as Org1
-peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificate","Args":["3"]}'
+peer chaincode query -C mychannel -n private -c '{"function":"ReadNewestCertificateByParentId","Args":["1"]}'
 sleep 2
 # Query private data as Org1
 peer chaincode query -C mychannel -n private -c '{"function":"ReadCertificatePrivateDetails","Args":["Org1MSPPrivateCollection","1"]}'
 sleep 2
 
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function": "GetAllCertificates","Args":[]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
-sleep 2
-
-peer chaincode query -C mychannel -n private -c '{"function":"GetAllCertificates","Args":[]}'
-sleep 2
-
-peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem" -C mychannel -n private -c '{"function": "GetCertificatesByPartialCompositeKey","Args":["1"]}' --peerAddresses localhost:7051 --tlsRootCertFiles "${PWD}/organizations/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt"
-sleep 2
-
+# Reading whole certificate history
 peer chaincode query -C mychannel -n private -c '{"function":"GetCertificatesByPartialCompositeKey","Args":["1"]}'
 sleep 2
